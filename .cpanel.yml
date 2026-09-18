@@ -1,0 +1,94 @@
+---
+deployment:
+  tasks:
+    # ------------------------------------------------------------------
+    # Nastari - cPanel Git deployment
+    #
+    # Docroot terpisah: kode aplikasi dan document root beda folder.
+    #   ~/repositories/chatbot-nastari -> ~/chatbot-nastari            (app)
+    #                                  -> ~/public_html/chatbot-nastari (docroot)
+    # Nama environment diambil dari nama folder clone, jadi file ini
+    # identik di semua branch. Clone bernama chatbot-nastari-stage
+    # otomatis deploy ke ~/chatbot-nastari-stage.
+    # ------------------------------------------------------------------
+    - export REPO=$(basename $(pwd))
+    - export DEPLOYPATH=$HOME/$REPO
+    - export PUBHTML=$HOME/public_html/$REPO
+    - echo "Deploying $REPO -> $DEPLOYPATH (docroot -> $PUBHTML)"
+
+    # Gagal cepat dengan pesan jelas kalau target belum dibuat.
+    - test -d $DEPLOYPATH
+    - test -d $PUBHTML
+
+    # ------------------------------------------------------------------
+    # 1. Kode aplikasi -> app directory
+    #
+    # storage/ TIDAK PERNAH disalin: di sana ada kop surat, kop surat
+    # hasil nastari:optimize-letterheads, surat yang sudah digenerate,
+    # dan log. Semuanya cuma ada di server, tidak ada di git.
+    # .env juga tidak disalin - repo tidak menyimpannya.
+    # ------------------------------------------------------------------
+    - /bin/cp -r app bootstrap config database routes resources $DEPLOYPATH
+    - /bin/cp artisan composer.json composer.lock $DEPLOYPATH
+
+    # public/ di app directory dipakai buat public_path(), bukan buat
+    # melayani request. index.php di sini TIDAK dipakai Apache.
+    - /bin/cp -r public $DEPLOYPATH
+    - /bin/rm -f $DEPLOYPATH/public/hot
+
+    # ------------------------------------------------------------------
+    # 2. Static assets -> document root
+    #
+    # index.php SENGAJA tidak ikut. index.php di docroot sudah diedit
+    # manual supaya require-nya menunjuk ke ~/chatbot-nastari/vendor dan
+    # ~/chatbot-nastari/bootstrap/app.php. Menimpanya dengan versi repo
+    # (yang pakai __DIR__.'/../vendor') bikin situs mati total.
+    #
+    # public/build juga tidak ikut: pipeline Vite di repo ini mati
+    # (cuma welcome.blade.php yang pakai @vite dan halaman itu tidak
+    # dirouting). Admin panel ambil Bootstrap/jQuery/Select2 dari CDN.
+    # ------------------------------------------------------------------
+    - /bin/cp public/.htaccess public/robots.txt public/favicon.ico $PUBHTML
+
+    # ------------------------------------------------------------------
+    # 3. Rebuild cache Laravel
+    #
+    # JANGAN pakai `optimize:clear` / `optimize` di project ini:
+    #
+    #   - optimize:clear memanggil cache:clear. State percakapan WhatsApp
+    #     hidup di cache store (CACHE_STORE=database, TTL 24 jam), jadi
+    #     cache:clear memutus SEMUA percakapan yang sedang berjalan -
+    #     termasuk pertanyaan Ruang yang diparkir buat hand-off ke Pandu.
+    #
+    #   - optimize memanggil route:cache, dan itu gagal karena route
+    #     /fix-route (routes/web.php) memakai closure.
+    #
+    #   - optimize juga memanggil config:cache, yang bikin env() balik
+    #     null di luar file config. ManagerAssistantService dan
+    #     AnalyzeWeeklyChat masih baca env('GEMINI_API_KEY') saat runtime,
+    #     jadi keduanya mati diam-diam tanpa error.
+    #
+    # Yang aman: bersihkan cache yang memang perlu dibersihkan, lalu
+    # cache ulang hanya view dan event.
+    # ------------------------------------------------------------------
+    - cd $DEPLOYPATH
+    - php artisan config:clear
+    - php artisan route:clear
+    - php artisan view:clear
+    - php artisan event:clear
+    - php artisan clear-compiled
+    - php artisan view:cache
+    - php artisan event:cache
+
+    # Refresh autoload biar class baru di app/ kebaca. Tidak pakai
+    # --classmap-authoritative supaya file yang belum sempat ke-map
+    # tetap ketemu lewat PSR-4.
+    - composer dump-autoload --no-dev --optimize --no-interaction
+
+    # Kalau composer.lock berubah, jalankan manual sesudah deploy:
+    #   cd ~/chatbot-nastari && composer install --no-dev --optimize-autoloader
+    # Kalau ada migration baru, jalankan manual juga (sengaja tidak
+    # otomatis - deploy cPanel tidak punya rollback):
+    #   cd ~/chatbot-nastari && php artisan migrate --force
+
+    - echo "Deploy $REPO selesai."
