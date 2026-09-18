@@ -71,6 +71,18 @@ deployment:
     # Yang aman: bersihkan cache yang memang perlu dibersihkan, lalu
     # cache ulang hanya view dan event.
     # ------------------------------------------------------------------
+    # storage/framework/* di git cuma berisi .gitignore, jadi deploy yang
+    # menyalin file (bukan clone) bisa meninggalkannya kosong. Kalau
+    # storage/framework/views tidak ada, realpath() di config view bawaan
+    # framework balik false, view.compiled jadi kosong, dan view:clear /
+    # view:cache mati dengan "View path not found." Blade juga gagal
+    # compile saat request masuk, bukan cuma pas artisan dijalankan.
+    - mkdir -p $DEPLOYPATH/storage/framework/views $DEPLOYPATH/storage/framework/cache/data $DEPLOYPATH/storage/framework/sessions $DEPLOYPATH/storage/logs $DEPLOYPATH/bootstrap/cache
+    # chmod dibatasi ke framework/logs saja. `chmod -R` di seluruh storage
+    # akan menelusuri semua surat PDF hasil generate, dan itu lambat.
+    - chmod -R 775 $DEPLOYPATH/storage/framework $DEPLOYPATH/storage/logs $DEPLOYPATH/bootstrap/cache
+    - chmod 775 $DEPLOYPATH/storage $DEPLOYPATH/storage/app
+
     - cd $DEPLOYPATH
     - php artisan config:clear
     - php artisan route:clear
@@ -80,10 +92,20 @@ deployment:
     - php artisan view:cache
     - php artisan event:cache
 
-    # Refresh autoload biar class baru di app/ kebaca. Tidak pakai
-    # --classmap-authoritative supaya file yang belum sempat ke-map
-    # tetap ketemu lewat PSR-4.
-    - composer dump-autoload --no-dev --optimize --no-interaction
+    # Refresh autoload biar class baru di app/ kebaca.
+    #
+    # JANGAN tambahkan --no-dev di sini. vendor/ di server dipasang
+    # lengkap dengan dev dependency, jadi vendor/composer/installed.json
+    # masih memuat laravel/pail dan package:discover tetap mendaftarkan
+    # PailServiceProvider. Dump --no-dev membuang pail dari peta autoload
+    # sementara manifest masih memanggilnya, dan hasilnya
+    # "Class Laravel\Pail\PailServiceProvider not found" di SETIAP boot -
+    # deploy gagal dan situs ikut mati. Kalau memang mau vendor tanpa dev,
+    # ubah pemasangannya (composer install --no-dev), bukan dump-nya.
+    #
+    # Juga tidak pakai --classmap-authoritative supaya file yang belum
+    # sempat ke-map tetap ketemu lewat PSR-4.
+    - composer dump-autoload --optimize --no-interaction
 
     # Kalau composer.lock berubah, jalankan manual sesudah deploy:
     #   cd ~/chatbot-nastari && composer install --no-dev --optimize-autoloader
